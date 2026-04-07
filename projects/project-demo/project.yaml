@@ -1,0 +1,7 @@
+name: project-demo
+default_status: todo
+statuses:
+- todo
+- in-progress
+- done
+issue_counter: 1

@@ -1,0 +1,21 @@
+[project]
+name = "cli-cms"
+version = "0.1.0"
+description = "Local-first multi-project task and docs tracker"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12.3",
+    "python-frontmatter>=1.1.0",
+    "PyYAML>=6.0.1",
+]
+
+[project.scripts]
+cms = "cli.main:run"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["cli", "cli.commands", "cli.core"]

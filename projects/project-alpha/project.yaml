@@ -1,0 +1,7 @@
+name: project-alpha
+default_status: todo
+statuses:
+- todo
+- in-progress
+- done
+issue_counter: 6
