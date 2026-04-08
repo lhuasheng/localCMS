@@ -49,7 +49,17 @@ cms issue link ISSUE-001 --project project-alpha --target ISSUE-002 --target-pro
 cms issue feedback add ISSUE-001 "Implementation complete and ready for review" --project project-alpha --author leow --completion
 cms issue feedback add ISSUE-001 "Added benchmark evidence after review" --project project-alpha --author leow --parent-feedback-id FB-001
 cms issue feedback list ISSUE-001 --project project-alpha
+cms validate-backlinks
+cms audit-graph
 ```
+
+## Obsidian Integration
+
+- Repo-owned Obsidian settings live under `.obsidian/`.
+- Templates live under `.obsidian/templates/`.
+- `cms validate-backlinks` scans project markdown for broken markdown links and wiki links.
+- `cms audit-graph` reports orphan notes, unresolved links, and per-project note counts.
+- Optional issue scaffolding templates can be used with `cms issue create ... --template issue-template`.
 
 ## Root Resolution
 

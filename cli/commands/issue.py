@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import re
 from typing import Any
 
 import typer
+import yaml
 
 from cli.core import parser, query, storage
 from cli.core.models import IssueRecord
@@ -129,6 +131,140 @@ def _ordered_issue_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return ordered
 
 
+PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+
+def _default_issue_content(description: str) -> str:
+    content = "## Description\n"
+    content += (description or "TODO") + "\n\n"
+    content += "## Tasks\n"
+    content += "- [ ] implement\n"
+    content += "- [ ] test\n"
+    content += "- [ ] document\n\n"
+    content += "## Implementation Notes\n"
+    content += "- pending\n\n"
+    content += "## Feedback Log\n"
+    content += "- none\n\n"
+    content += "## Evidence\n"
+    content += "- pending\n"
+    return content
+
+
+def _resolve_issue_template_path(root: Path, template: str) -> Path:
+    candidate = Path(template)
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    root_relative = (root / candidate).resolve()
+    if root_relative.exists():
+        return root_relative
+
+    template_name = template if template.endswith(".md") else f"{template}.md"
+    obsidian_template = (root / ".obsidian" / "templates" / template_name).resolve()
+    if obsidian_template.exists():
+        return obsidian_template
+
+    raise typer.BadParameter(f"Issue template not found: {template}")
+
+
+def _split_template_text(template_text: str) -> tuple[str | None, str]:
+    lines = template_text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, template_text
+
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == "---":
+            frontmatter_text = "\n".join(lines[1:index])
+            body_text = "\n".join(lines[index + 1 :]).lstrip("\n")
+            return frontmatter_text, body_text
+
+    raise typer.BadParameter("Issue template frontmatter is missing a closing '---' delimiter")
+
+
+def _replace_template_placeholders(template_text: str, values: dict[str, str]) -> tuple[str, list[str]]:
+    unresolved: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        if key not in values:
+            unresolved.add(key)
+            return match.group(0)
+        return values[key]
+
+    rendered = PLACEHOLDER_PATTERN.sub(replace, template_text)
+    unresolved.update(PLACEHOLDER_PATTERN.findall(rendered))
+    return rendered, sorted(unresolved)
+
+
+def _yaml_template_value(value: Any) -> str:
+    dumped = yaml.safe_dump(value, default_flow_style=True, allow_unicode=False).strip()
+    if dumped.endswith("\n..."):
+        return dumped[: -len("\n...")].rstrip()
+    return dumped
+
+
+def _render_issue_template(template_text: str, values: dict[str, str], yaml_values: dict[str, str]) -> tuple[dict[str, Any], str]:
+    frontmatter_text, body_template = _split_template_text(template_text)
+    unresolved: set[str] = set()
+
+    template_metadata: dict[str, Any] = {}
+    if frontmatter_text is not None:
+        rendered_frontmatter, unresolved_frontmatter = _replace_template_placeholders(frontmatter_text, yaml_values)
+        unresolved.update(unresolved_frontmatter)
+        if not unresolved_frontmatter:
+            try:
+                loaded = yaml.safe_load(rendered_frontmatter) or {}
+            except yaml.YAMLError as exc:
+                raise typer.BadParameter("Issue template frontmatter is invalid after rendering") from exc
+            if not isinstance(loaded, dict):
+                raise typer.BadParameter("Issue template frontmatter must be a YAML object")
+            template_metadata = loaded
+
+    rendered_body, unresolved_body = _replace_template_placeholders(body_template, values)
+    unresolved.update(unresolved_body)
+
+    if unresolved:
+        placeholders = ", ".join(sorted(unresolved))
+        raise typer.BadParameter(f"Issue template contains unresolved placeholders: {placeholders}")
+    return template_metadata, rendered_body
+
+
+def _build_issue_from_template(
+    root: Path,
+    template: str,
+    metadata: dict[str, Any],
+    project: str,
+    description: str,
+) -> tuple[dict[str, Any], str]:
+    template_path = _resolve_issue_template_path(root, template)
+    template_text = template_path.read_text(encoding="utf-8")
+    tag_values = list(metadata.get("tags", []))
+    values = {
+        "id": str(metadata["id"]),
+        "title": str(metadata["title"]),
+        "status": str(metadata["status"]),
+        "priority": str(metadata["priority"]),
+        "created_at": str(metadata["created_at"]),
+        "project": project,
+        "description": description or "TODO",
+    }
+    yaml_values = {key: _yaml_template_value(value) for key, value in values.items()}
+    yaml_values["tags_inline"] = _yaml_template_value(tag_values)
+    yaml_values["tags_block"] = "  []" if not tag_values else "\n".join(f"  - {tag}" for tag in tag_values)
+
+    template_metadata, template_content = _render_issue_template(template_text, values, yaml_values)
+
+    if "tags" in template_metadata and not isinstance(template_metadata["tags"], list):
+        raise typer.BadParameter("Issue template frontmatter field 'tags' must be a list")
+
+    merged_metadata = dict(template_metadata)
+    for key, value in metadata.items():
+        merged_metadata[key] = value
+
+    content = template_content.strip() or _default_issue_content(description)
+    return _ordered_issue_metadata(merged_metadata), content
+
+
 def _append_feedback_to_body(content: str, entry: dict[str, str]) -> str:
     marker = "## Feedback Log"
     lines = content.rstrip().splitlines()
@@ -177,11 +313,12 @@ def create_issue(
     description: str = typer.Option("", "--description", help="Issue description"),
     priority: str = typer.Option("medium", "--priority", help="Priority"),
     tags: list[str] = typer.Option([], "--tag", help="Issue tag. Repeat flag for multiple tags."),
+    template: str | None = typer.Option(None, "--template", help="Optional issue template name or path"),
     json_output: bool = typer.Option(False, "--json", help="Output JSON"),
 ) -> None:
     root = _root(ctx)
-    issue_id = storage.next_issue_id(root, project)
     config = storage.load_project_config(root, project)
+    issue_id = f"ISSUE-{config.issue_counter + 1:03d}"
     metadata = {
         "id": issue_id,
         "title": title,
@@ -190,21 +327,21 @@ def create_issue(
         "created_at": date.today().isoformat(),
         "tags": tags,
     }
-    content = "## Description\n"
-    content += (description or "TODO") + "\n\n"
-    content += "## Tasks\n"
-    content += "- [ ] implement\n"
-    content += "- [ ] test\n"
-    content += "- [ ] document\n\n"
-    content += "## Implementation Notes\n"
-    content += "- pending\n\n"
-    content += "## Feedback Log\n"
-    content += "- none\n\n"
-    content += "## Evidence\n"
-    content += "- pending\n"
+    ordered_metadata = _ordered_issue_metadata(metadata)
+    content = _default_issue_content(description)
+
+    if template is not None:
+        ordered_metadata, content = _build_issue_from_template(root, template, ordered_metadata, project, description)
 
     path = storage.issue_file_path(root, project, issue_id, title)
-    parser.save_markdown(path, _ordered_issue_metadata(metadata), content)
+    parser.save_markdown(path, ordered_metadata, content)
+    config.issue_counter += 1
+    try:
+        storage.save_project_config(root, project, config)
+    except Exception:
+        if path.exists():
+            path.unlink()
+        raise
 
     payload = {
         "ok": True,
