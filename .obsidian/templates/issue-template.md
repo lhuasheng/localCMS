@@ -1,9 +1,14 @@
 ---
+# localCMS issue template
+# Required fields (validated by `cms issue create`): title, status, assignee, created_at, project
+# Placeholders ({{...}}) are filled automatically by the CLI.
 id: {{id}}
 title: {{title}}
 status: {{status}}
-priority: {{priority}}
+assignee: {{assignee}}
 created_at: {{created_at}}
+project: {{project}}
+priority: {{priority}}
 tags: {{tags_inline}}
 ---
 
