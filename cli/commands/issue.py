@@ -9,7 +9,7 @@ import typer
 import yaml
 
 from cli.core import parser, query, storage
-from cli.core.models import IssueRecord
+from cli.core.models import IssueRecord, validate_frontmatter
 from cli.core.render import emit_json
 
 app = typer.Typer(help="Manage issues")
@@ -132,6 +132,47 @@ def _ordered_issue_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+
+def _default_template_path(root: Path) -> Path | None:
+    """Return the path to the default issue template if it exists."""
+    candidate = (root / ".obsidian" / "templates" / "issue-template.md").resolve()
+    return candidate if candidate.exists() else None
+
+
+def _load_required_fields_from_template(template_path: Path) -> list[str]:
+    """Extract required field names from a template's YAML frontmatter."""
+    template_text = template_path.read_text(encoding="utf-8")
+    frontmatter_text, _ = _split_template_text(template_text)
+    if not frontmatter_text:
+        return []
+    fields: list[str] = []
+    for line in frontmatter_text.splitlines():
+        match = re.match(r"^([a-zA-Z][a-zA-Z0-9_]*)\s*:", line)
+        if match:
+            fields.append(match.group(1))
+    return fields
+
+
+def _auto_validate(root: Path, metadata: dict[str, Any], skip_validation: bool, operation: str = "create/update") -> None:
+    """Validate issue metadata against the default template's required fields.
+
+    Does nothing when *skip_validation* is True or no default template exists.
+    Raises :exc:`typer.BadParameter` listing any missing required fields.
+    """
+    if skip_validation:
+        return
+    template_path = _default_template_path(root)
+    if template_path is None:
+        return
+    required_fields = _load_required_fields_from_template(template_path)
+    missing = validate_frontmatter(metadata, required_fields)
+    if missing:
+        fields_str = ", ".join(missing)
+        raise typer.BadParameter(
+            f"Cannot {operation} issue: frontmatter is missing required fields: {fields_str}. "
+            f"Add the missing fields or use --skip-validation to bypass."
+        )
 
 
 def _default_issue_content(description: str) -> str:
@@ -314,6 +355,7 @@ def create_issue(
     priority: str = typer.Option("medium", "--priority", help="Priority"),
     tags: list[str] = typer.Option([], "--tag", help="Issue tag. Repeat flag for multiple tags."),
     template: str | None = typer.Option(None, "--template", help="Optional issue template name or path"),
+    skip_validation: bool = typer.Option(False, "--skip-validation", help="Skip template frontmatter validation"),
     json_output: bool = typer.Option(False, "--json", help="Output JSON"),
 ) -> None:
     root = _root(ctx)
@@ -332,6 +374,8 @@ def create_issue(
 
     if template is not None:
         ordered_metadata, content = _build_issue_from_template(root, template, ordered_metadata, project, description)
+
+    _auto_validate(root, ordered_metadata, skip_validation, operation="create")
 
     path = storage.issue_file_path(root, project, issue_id, title)
     parser.save_markdown(path, ordered_metadata, content)
@@ -455,6 +499,7 @@ def update_issue(
     title: str | None = typer.Option(None, "--title", help="New title"),
     add_tags: list[str] = typer.Option([], "--add-tag", help="Add tag. Repeat flag for multiple tags."),
     remove_tags: list[str] = typer.Option([], "--remove-tag", help="Remove tag. Repeat flag for multiple tags."),
+    skip_validation: bool = typer.Option(False, "--skip-validation", help="Skip template frontmatter validation"),
     json_output: bool = typer.Option(False, "--json", help="Output JSON"),
 ) -> None:
     root = _root(ctx)
@@ -476,6 +521,8 @@ def update_issue(
     for tag in remove_tags:
         current_tags = [value for value in current_tags if value != tag]
     metadata["tags"] = current_tags
+
+    _auto_validate(root, metadata, skip_validation, operation="update")
 
     parser.save_markdown(record.path, _ordered_issue_metadata(metadata), content)
 
