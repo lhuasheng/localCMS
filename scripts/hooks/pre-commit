@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# pre-commit hook: validates backlinks before allowing a commit.
+# Install: copy or symlink this file to .git/hooks/pre-commit and chmod +x it.
+# Bypass:  git commit --no-verify
+
+set -euo pipefail
+
+echo "[pre-commit] Running cms validate-backlinks..."
+
+# Resolve the repo root from the hook's location so the hook works regardless
+# of the current working directory.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Run validation from the repo root so that relative paths in output are clear.
+cd "$REPO_ROOT"
+
+if ! cms validate-backlinks 2>&1; then
+    echo ""
+    echo "[pre-commit] ✗ Backlink validation failed. Fix the issues above before committing."
+    echo "             To skip this check (not recommended): git commit --no-verify"
+    exit 1
+fi
+
+echo "[pre-commit] ✓ Backlink validation passed."
+exit 0

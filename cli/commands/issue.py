@@ -113,7 +113,7 @@ def _ordered_issue_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     linked_issues = [_normalize_link_entry(item) for item in _load_links(metadata)]
     feedback_items = [_normalize_feedback_entry(item) for item in _load_feedback(metadata)]
 
-    core_keys = ["id", "title", "status", "priority", "created_at", "tags", "linked_issues", "feedback"]
+    core_keys = ["id", "title", "status", "assignee", "created_at", "project", "priority", "tags", "linked_issues", "feedback"]
     for key in core_keys:
         if key == "linked_issues" and linked_issues:
             ordered[key] = linked_issues
@@ -132,6 +132,18 @@ def _ordered_issue_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+
+REQUIRED_ISSUE_FIELDS: list[str] = ["title", "status", "assignee", "created_at", "project"]
+
+
+def _warn_missing_fields(metadata: dict[str, Any], required: list[str]) -> list[str]:
+    """Return field names from *required* that are absent or empty in *metadata*.
+
+    A field is considered missing when its value is absent (key not in dict),
+    ``None``, an empty string ``""``, or any other falsy scalar (``0``, ``False``).
+    Non-empty lists and non-zero numbers are treated as present.
+    """
+    return [f for f in required if not metadata.get(f)]
 
 
 def _default_template_path(root: Path) -> Path | None:
@@ -284,6 +296,7 @@ def _build_issue_from_template(
         "id": str(metadata["id"]),
         "title": str(metadata["title"]),
         "status": str(metadata["status"]),
+        "assignee": str(metadata.get("assignee", "")),
         "priority": str(metadata["priority"]),
         "created_at": str(metadata["created_at"]),
         "project": project,
@@ -353,6 +366,7 @@ def create_issue(
     project: str = typer.Option(..., "--project", help="Project name"),
     description: str = typer.Option("", "--description", help="Issue description"),
     priority: str = typer.Option("medium", "--priority", help="Priority"),
+    assignee: str = typer.Option("", "--assignee", help="Issue assignee (username or display name)"),
     tags: list[str] = typer.Option([], "--tag", help="Issue tag. Repeat flag for multiple tags."),
     template: str | None = typer.Option(None, "--template", help="Optional issue template name or path"),
     skip_validation: bool = typer.Option(False, "--skip-validation", help="Skip template frontmatter validation"),
@@ -365,8 +379,10 @@ def create_issue(
         "id": issue_id,
         "title": title,
         "status": config.default_status,
+        "assignee": assignee,
         "priority": priority,
         "created_at": date.today().isoformat(),
+        "project": project,
         "tags": tags,
     }
     ordered_metadata = _ordered_issue_metadata(metadata)
