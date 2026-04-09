@@ -391,6 +391,10 @@ def create_issue(
     if template is not None:
         ordered_metadata, content = _build_issue_from_template(root, template, ordered_metadata, project, description)
 
+    missing = _warn_missing_fields(ordered_metadata, REQUIRED_ISSUE_FIELDS)
+    if missing:
+        typer.echo(f"Warning: missing required fields: {', '.join(missing)}", err=True)
+
     _auto_validate(root, ordered_metadata, skip_validation, operation="create")
 
     path = storage.issue_file_path(root, project, issue_id, title)
