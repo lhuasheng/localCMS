@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
-# Install git hooks from the scripts/ directory into .git/hooks/.
-# Usage: bash scripts/install-hooks.sh
+# install-hooks.sh — installs the pre-commit hook into .git/hooks/.
+# Usage:  bash scripts/install-hooks.sh
+#         Run once from the repo root after cloning.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 HOOKS_DIR="$REPO_ROOT/.git/hooks"
+HOOK_SOURCE="$REPO_ROOT/scripts/hooks/pre-commit"
+if [ ! -f "$HOOK_SOURCE" ]; then
+    HOOK_SOURCE="$REPO_ROOT/scripts/pre-commit"
+fi
+HOOK_DEST="$HOOKS_DIR/pre-commit"
 
-install_hook() {
-    local name="$1"
-    local src="$REPO_ROOT/scripts/$name"
-    local dst="$HOOKS_DIR/$name"
+if [ ! -f "$HOOK_SOURCE" ]; then
+    echo "Error: hook source not found at $HOOK_SOURCE" >&2
+    exit 1
+fi
 
-    if [ ! -f "$src" ]; then
-        echo "Hook source not found: $src" >&2
-        return 1
-    fi
+cp "$HOOK_SOURCE" "$HOOK_DEST"
+chmod +x "$HOOK_DEST"
 
-    cp "$src" "$dst"
-    chmod +x "$dst"
-    echo "Installed $name -> $dst"
-}
-
-install_hook pre-commit
-
-echo "Done. Hooks installed in $HOOKS_DIR"
+echo "Installed pre-commit hook at $HOOK_DEST"
+echo "Run 'git commit --no-verify' to bypass the hook if needed."

@@ -43,3 +43,7 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Generated audit reports
+projects/audit-reports/
+projects/*/audit-reports/
