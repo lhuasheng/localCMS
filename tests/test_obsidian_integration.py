@@ -572,6 +572,148 @@ class ObsidianCommandTests(unittest.TestCase):
             self.assertEqual(payload["unresolved_count"], 1)
             self.assertEqual(payload["unresolved"][0]["target"], "missing-note.md")
 
+    def test_audit_graph_detects_cycles_and_saves_report(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root, issue_counter=2)
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-001-alpha.md",
+                """
+                ---
+                id: ISSUE-001
+                title: Alpha
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                See [[ISSUE-002-beta]].
+                """,
+            )
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-002-beta.md",
+                """
+                ---
+                id: ISSUE-002
+                title: Beta
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                See [[ISSUE-001-alpha]].
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertEqual(len(payload["cycles"]), 1)
+            self.assertIn("report_path", payload)
+            report_path = Path(payload["report_path"])
+            self.assertTrue(report_path.exists())
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("Vault Audit Report", report_text)
+            self.assertIn("Link Cycles", report_text)
+            self.assertIn("ISSUE-001-alpha", report_text)
+
+    def test_audit_graph_no_save_report_skips_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root)
+            _write_markdown(
+                root / "projects" / "demo" / "docs" / "guide.md",
+                """
+                ---
+                created_at: '2026-04-09'
+                project: demo
+                title: Guide
+                ---
+
+                # Guide
+
+                Plain text only.
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--no-save-report",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertNotIn("report_path", payload)
+            reports_dir = root / "projects" / "demo" / "audit-reports"
+            self.assertFalse(reports_dir.exists())
+
+    def test_audit_graph_no_cycles_clean_vault(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root, issue_counter=1)
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-001-clean.md",
+                """
+                ---
+                id: ISSUE-001
+                title: Clean
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                No links.
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--no-save-report",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["cycles"], [])
+
 class FrontmatterValidationTests(unittest.TestCase):
     """Tests for auto-validation of issue frontmatter against the default template."""
 

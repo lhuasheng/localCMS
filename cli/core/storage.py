@@ -54,6 +54,10 @@ def docs_dir(root: Path, project: str) -> Path:
     return project_dir(root, project) / "docs"
 
 
+def audit_reports_dir(root: Path, project: str) -> Path:
+    return project_dir(root, project) / "audit-reports"
+
+
 def ensure_base_dirs(root: Path) -> None:
     projects_dir(root).mkdir(parents=True, exist_ok=True)
     global_dir(root).mkdir(parents=True, exist_ok=True)

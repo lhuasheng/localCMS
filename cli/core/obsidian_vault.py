@@ -99,6 +99,45 @@ class ObsidianVault:
                 inbound[link.resolved_path.resolve()] += 1
         return dict(inbound)
 
+    def link_cycles(self) -> list[list[Path]]:
+        """Return lists of note paths that form link cycles in the note graph."""
+        graph: dict[Path, list[Path]] = defaultdict(list)
+        for link in self.all_links():
+            if link.is_resolved and link.is_note_link and link.resolved_path is not None:
+                src = link.source_path.resolve()
+                dst = link.resolved_path.resolve()
+                if src != dst:
+                    graph[src].append(dst)
+
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: dict[Path, int] = {note.path.resolve(): WHITE for note in self.notes}
+        cycles: list[list[Path]] = []
+        found_cycle_starts: set[Path] = set()
+        path_stack: list[Path] = []
+
+        def _dfs(node: Path) -> None:
+            color[node] = GRAY
+            path_stack.append(node)
+            for neighbor in graph.get(node, []):
+                if neighbor not in color:
+                    continue
+                if color[neighbor] == GRAY:
+                    if neighbor not in found_cycle_starts:
+                        found_cycle_starts.add(neighbor)
+                        idx = path_stack.index(neighbor)
+                        cycles.append(list(path_stack[idx:]))
+                elif color[neighbor] == WHITE:
+                    _dfs(neighbor)
+            path_stack.pop()
+            color[node] = BLACK
+
+        for note in self.notes:
+            node = note.path.resolve()
+            if color.get(node) == WHITE:
+                _dfs(node)
+
+        return cycles
+
     def get_all_files(self) -> list[VaultNote]:
         """Return all notes in the vault."""
         return list(self.notes)
