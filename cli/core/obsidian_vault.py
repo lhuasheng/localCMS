@@ -51,8 +51,6 @@ class ObsidianVault:
         for note in notes:
             self._notes_by_stem[note.path.stem].append(note)
             self._notes_by_relative_key[self._relative_key(note.relative_path)] = note
-        self._links_cache: dict[Path, list[VaultLink]] = {}
-        self._all_links_cache: list[VaultLink] | None = None
 
     @classmethod
     def scan(cls, root: Path, project: str | None = None) -> "ObsidianVault":
@@ -78,12 +76,10 @@ class ObsidianVault:
         return cls(resolved_root, notes)
 
     def all_links(self) -> list[VaultLink]:
-        if self._all_links_cache is None:
-            links: list[VaultLink] = []
-            for note in self.notes:
-                links.extend(self.links_for(note))
-            self._all_links_cache = links
-        return self._all_links_cache
+        links: list[VaultLink] = []
+        for note in self.notes:
+            links.extend(self.links_for(note))
+        return links
 
     def unresolved_links(self) -> list[VaultLink]:
         return [link for link in self.all_links() if not link.is_resolved]
@@ -98,38 +94,6 @@ class ObsidianVault:
             if link.is_resolved and link.is_note_link and link.resolved_path is not None:
                 inbound[link.resolved_path.resolve()] += 1
         return dict(inbound)
-
-    def get_all_files(self) -> list[VaultNote]:
-        """Return all notes in the vault."""
-        return list(self.notes)
-
-    def get_backlinks(self, file: Path) -> list[VaultLink]:
-        """Return outbound links originating from *file*."""
-        resolved_file = file.resolve()
-        note = self._notes_by_path.get(resolved_file)
-        if note is None:
-            return []
-        return self.links_for(note)
-
-    def get_backlinks_to(self, file: Path) -> list[VaultLink]:
-        """Return inbound links that point to *file* from other notes."""
-        resolved_file = file.resolve()
-        return [
-            link
-            for link in self.all_links()
-            if link.is_resolved
-            and link.is_note_link
-            and link.resolved_path is not None
-            and link.resolved_path.resolve() == resolved_file
-        ]
-
-    def find_orphaned_docs(self) -> list[VaultNote]:
-        """Return notes that are not referenced by any other note."""
-        return self.orphan_notes()
-
-    def find_broken_links(self) -> list[VaultLink]:
-        """Return links that could not be resolved to an existing note or file."""
-        return self.unresolved_links()
 
     def summary_by_project(self) -> list[dict[str, object]]:
         inbound_counts = self.inbound_link_counts()
@@ -165,68 +129,6 @@ class ObsidianVault:
                 }
             )
         return summary
-
-    def find_cycles(self) -> list[list[Path]]:
-        """Return circular dependency chains found in the resolved note-link graph.
-
-        Each entry is an ordered list of :class:`Path` objects that forms a cycle.
-        The same physical cycle may appear at most once (detected at the earliest
-        node in DFS traversal order).
-        """
-        # Build adjacency list restricted to resolved note-to-note links.
-        graph: dict[Path, list[Path]] = {note.path.resolve(): [] for note in self.notes}
-        for link in self.all_links():
-            if link.is_note_link and link.resolved_path is not None:
-                src = link.source_path.resolve()
-                dst = link.resolved_path.resolve()
-                if src != dst and src in graph and dst in graph:
-                    graph[src].append(dst)
-
-        # Iterative DFS with coloring to detect back-edges.
-        # WHITE (0) = unvisited, GRAY (1) = on current path, BLACK (2) = fully explored.
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color: dict[Path, int] = {node: WHITE for node in graph}
-        # path_index maps a GRAY node to its position in the current dfs_path.
-        path_index: dict[Path, int] = {}
-        dfs_path: list[Path] = []
-        cycles: list[list[Path]] = []
-        seen_cycle_starts: set[frozenset[Path]] = set()
-
-        for start in graph:
-            if color[start] != WHITE:
-                continue
-            # Stack holds (node, iterator-over-neighbours, already-pushed-to-path).
-            stack: list[tuple[Path, int, bool]] = [(start, 0, False)]
-            while stack:
-                node, neighbour_idx, on_path = stack[-1]
-                if not on_path:
-                    # First visit: mark GRAY and record position.
-                    color[node] = GRAY
-                    path_index[node] = len(dfs_path)
-                    dfs_path.append(node)
-                    stack[-1] = (node, neighbour_idx, True)
-
-                neighbours = graph.get(node, [])
-                if neighbour_idx < len(neighbours):
-                    stack[-1] = (node, neighbour_idx + 1, True)
-                    nb = neighbours[neighbour_idx]
-                    if color[nb] == WHITE:
-                        stack.append((nb, 0, False))
-                    elif color[nb] == GRAY:
-                        # Back-edge found → extract the cycle.
-                        cycle = dfs_path[path_index[nb]:]
-                        key = frozenset(cycle)
-                        if key not in seen_cycle_starts:
-                            seen_cycle_starts.add(key)
-                            cycles.append(list(cycle))
-                else:
-                    # All neighbours explored: mark BLACK and pop from path.
-                    color[node] = BLACK
-                    dfs_path.pop()
-                    del path_index[node]
-                    stack.pop()
-
-        return cycles
 
     def circular_dependencies(self) -> list[list[Path]]:
         """Return all simple cycles in the note-to-note link graph (each as an ordered list of Paths)."""
@@ -267,9 +169,6 @@ class ObsidianVault:
         return cycles
 
     def links_for(self, note: VaultNote) -> list[VaultLink]:
-        cached = self._links_cache.get(note.path.resolve())
-        if cached is not None:
-            return cached
         sanitized_content = _strip_code_spans_preserve_lines(note.content)
         links: list[VaultLink] = []
 
@@ -307,7 +206,6 @@ class ObsidianVault:
                 )
             )
 
-        self._links_cache[note.path.resolve()] = links
         return links
 
     def _resolve_markdown_target(self, source_path: Path, raw_target: str) -> tuple[Path | None, str | None]:

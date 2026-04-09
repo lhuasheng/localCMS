@@ -6,11 +6,6 @@ from pathlib import Path
 from typing import Any
 
 
-def validate_frontmatter(data: dict[str, Any], required_fields: list[str]) -> list[str]:
-    """Return a list of required field names that are absent from *data*."""
-    return [field for field in required_fields if field not in data or data[field] is None]
-
-
 @dataclass
 class ProjectConfig:
     name: str
