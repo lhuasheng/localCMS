@@ -226,6 +226,137 @@ class IssueTemplateTests(unittest.TestCase):
             self.assertTrue((root / "projects" / "demo" / "issues" / "ISSUE-001-recovered-task.md").exists())
             self.assertEqual(parser.read_yaml(root / "projects" / "demo" / "project.yaml")["issue_counter"], 1)
 
+    def test_issue_create_stores_assignee_and_project_in_metadata(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "issue",
+                    "create",
+                    "Assignee test task",
+                    "--project",
+                    "demo",
+                    "--assignee",
+                    "alice",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            created = root / "projects" / "demo" / "issues" / "ISSUE-001-assignee-test-task.md"
+            self.assertTrue(created.exists())
+            metadata, _ = parser.load_markdown(created)
+            self.assertEqual(metadata["assignee"], "alice")
+            self.assertEqual(metadata["project"], "demo")
+
+    def test_issue_create_warns_on_missing_required_fields(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "issue",
+                    "create",
+                    "No assignee task",
+                    "--project",
+                    "demo",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("Warning", result.output)
+            self.assertIn("assignee", result.output)
+
+    def test_issue_create_with_full_required_fields_no_warning(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root)
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "issue",
+                    "create",
+                    "Fully specified task",
+                    "--project",
+                    "demo",
+                    "--assignee",
+                    "bob",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertNotIn("Warning", result.output)
+
+    def test_issue_template_with_assignee_and_project_placeholders(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".obsidian" / "templates").mkdir(parents=True)
+            _write_demo_project(root)
+            _write_markdown(
+                root / ".obsidian" / "templates" / "issue-template.md",
+                """
+                ---
+                # localCMS issue template
+                id: {{id}}
+                title: {{title}}
+                status: {{status}}
+                assignee: {{assignee}}
+                created_at: {{created_at}}
+                project: {{project}}
+                priority: {{priority}}
+                tags: {{tags_inline}}
+                ---
+
+                ## Description
+                {{description}}
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "issue",
+                    "create",
+                    "Full template task",
+                    "--project",
+                    "demo",
+                    "--assignee",
+                    "carol",
+                    "--description",
+                    "Testing full template",
+                    "--template",
+                    "issue-template",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            created = root / "projects" / "demo" / "issues" / "ISSUE-001-full-template-task.md"
+            self.assertTrue(created.exists())
+            metadata, _ = parser.load_markdown(created)
+            self.assertEqual(metadata["assignee"], "carol")
+            self.assertEqual(metadata["project"], "demo")
+
 
 class ObsidianCommandTests(unittest.TestCase):
     def test_validate_backlinks_reports_unresolved_links_and_exits_non_zero(self) -> None:
