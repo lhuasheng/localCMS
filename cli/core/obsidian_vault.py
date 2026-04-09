@@ -131,6 +131,41 @@ class ObsidianVault:
         """Return links that could not be resolved to an existing note or file."""
         return self.unresolved_links()
 
+    def summary_by_project(self) -> list[dict[str, object]]:
+        inbound_counts = self.inbound_link_counts()
+        unresolved = self.unresolved_links()
+        unresolved_by_project: dict[str, int] = defaultdict(int)
+        for link in unresolved:
+            unresolved_by_project[link.source_project] += 1
+
+        links_by_project: dict[str, int] = defaultdict(int)
+        note_links_by_project: dict[str, int] = defaultdict(int)
+        for link in self.all_links():
+            links_by_project[link.source_project] += 1
+            if link.is_note_link:
+                note_links_by_project[link.source_project] += 1
+
+        notes_by_project: dict[str, list[VaultNote]] = defaultdict(list)
+        for note in self.notes:
+            notes_by_project[note.project].append(note)
+
+        summary: list[dict[str, object]] = []
+        for project_name in sorted(notes_by_project):
+            project_notes = notes_by_project[project_name]
+            summary.append(
+                {
+                    "project": project_name,
+                    "notes": len(project_notes),
+                    "docs": sum(1 for note in project_notes if note.category == "docs"),
+                    "issues": sum(1 for note in project_notes if note.category == "issues"),
+                    "outbound_links": links_by_project.get(project_name, 0),
+                    "note_links": note_links_by_project.get(project_name, 0),
+                    "orphans": sum(1 for note in project_notes if inbound_counts.get(note.path.resolve(), 0) == 0),
+                    "unresolved_links": unresolved_by_project.get(project_name, 0),
+                }
+            )
+        return summary
+
     def find_cycles(self) -> list[list[Path]]:
         """Return circular dependency chains found in the resolved note-link graph.
 
@@ -192,41 +227,6 @@ class ObsidianVault:
                     stack.pop()
 
         return cycles
-
-
-        inbound_counts = self.inbound_link_counts()
-        unresolved = self.unresolved_links()
-        unresolved_by_project: dict[str, int] = defaultdict(int)
-        for link in unresolved:
-            unresolved_by_project[link.source_project] += 1
-
-        links_by_project: dict[str, int] = defaultdict(int)
-        note_links_by_project: dict[str, int] = defaultdict(int)
-        for link in self.all_links():
-            links_by_project[link.source_project] += 1
-            if link.is_note_link:
-                note_links_by_project[link.source_project] += 1
-
-        notes_by_project: dict[str, list[VaultNote]] = defaultdict(list)
-        for note in self.notes:
-            notes_by_project[note.project].append(note)
-
-        summary: list[dict[str, object]] = []
-        for project_name in sorted(notes_by_project):
-            project_notes = notes_by_project[project_name]
-            summary.append(
-                {
-                    "project": project_name,
-                    "notes": len(project_notes),
-                    "docs": sum(1 for note in project_notes if note.category == "docs"),
-                    "issues": sum(1 for note in project_notes if note.category == "issues"),
-                    "outbound_links": links_by_project.get(project_name, 0),
-                    "note_links": note_links_by_project.get(project_name, 0),
-                    "orphans": sum(1 for note in project_notes if inbound_counts.get(note.path.resolve(), 0) == 0),
-                    "unresolved_links": unresolved_by_project.get(project_name, 0),
-                }
-            )
-        return summary
 
     def circular_dependencies(self) -> list[list[Path]]:
         """Return all simple cycles in the note-to-note link graph (each as an ordered list of Paths)."""
