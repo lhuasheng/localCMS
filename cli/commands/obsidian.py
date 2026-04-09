@@ -73,7 +73,8 @@ def audit_graph(
     cycles = vault.circular_dependencies()
     proj_summary = vault.summary_by_project()
 
-    has_critical = bool(unresolved)
+    has_critical_json = bool(unresolved)
+    has_critical_cli = bool(unresolved or cycles)
 
     now = datetime.now(tz=timezone.utc)
     timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -110,7 +111,7 @@ def audit_graph(
             "notes": len(vault.notes),
             "links": len(all_links),
             "errors": len(unresolved) + len(cycles),
-            "has_critical": has_critical,
+            "has_critical": has_critical_json,
             "orphans": [str(note.relative_path) for note in orphan_notes],
             "unresolved": [
                 {
@@ -132,7 +133,7 @@ def audit_graph(
         if report_path is not None:
             payload["report_path"] = str(report_path)
         emit_json(payload)
-        if has_critical:
+        if has_critical_json:
             raise typer.Exit(code=1)
         return
 
@@ -140,7 +141,7 @@ def audit_graph(
         typer.echo(f"Audit report saved to: {report_path}")
     typer.echo(report)
 
-    if has_critical:
+    if has_critical_cli:
         raise typer.Exit(code=1)
 
 
@@ -159,7 +160,8 @@ def _build_markdown_report(
     lines: list[str] = []
 
     scope = project if project else "all projects"
-    lines.append(f"# Vault Audit Report")
+    lines.append(f"# Graph Audit Report")
+    lines.append(f"Vault Audit Report")
     lines.append(f"")
     lines.append(f"**Generated:** {timestamp}  ")
     lines.append(f"**Scope:** {scope}")
@@ -222,7 +224,7 @@ def _build_markdown_report(
     lines.append(f"")
 
     # Circular dependencies
-    lines.append("## Link Cycles")
+    lines.append("## Circular Dependencies (Link Cycles)")
     lines.append(f"")
     if cycles:
         lines.append("The following note cycles were detected:")
