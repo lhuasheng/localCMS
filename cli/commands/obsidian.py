@@ -62,7 +62,8 @@ def audit_graph(
     ctx: typer.Context,
     project: str | None = typer.Option(None, "--project", help="Restrict audit to one project"),
     output: Path | None = typer.Option(None, "--output", help="Write Markdown report to this file instead of auto-save"),
-    json_output: bool = typer.Option(False, "--json", help="Output JSON summary (skips Markdown save)"),
+    json_output: bool = typer.Option(False, "--json", help="Output JSON summary"),
+    save_report: bool = typer.Option(True, "--save-report/--no-save-report", help="Save audit report to disk"),
 ) -> None:
     root = _root(ctx)
     vault = ObsidianVault.scan(root, project)
@@ -72,7 +73,37 @@ def audit_graph(
     cycles = vault.circular_dependencies()
     proj_summary = vault.summary_by_project()
 
-    has_critical = bool(unresolved or cycles)
+    has_critical_json = bool(unresolved)
+    has_critical_cli = bool(unresolved or cycles)
+
+    now = datetime.now(tz=timezone.utc)
+    timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+    report = _build_markdown_report(
+        root=root,
+        project=project,
+        timestamp=timestamp,
+        vault=vault,
+        all_links=all_links,
+        unresolved=unresolved,
+        orphan_notes=orphan_notes,
+        cycles=cycles,
+        proj_summary=proj_summary,
+    )
+
+    report_path: Path | None = None
+    if save_report:
+        if output is not None:
+            report_path = output
+        else:
+            file_ts = now.strftime("%Y-%m-%d-%H%M%S")
+            if project:
+                audit_dir = storage.project_dir(root, project) / "audit-reports"
+            else:
+                audit_dir = storage.projects_dir(root) / "audit-reports"
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            report_path = audit_dir / f"{file_ts}.md"
+
+        report_path.write_text(report, encoding="utf-8")
 
     if json_output:
         payload = {
@@ -80,7 +111,7 @@ def audit_graph(
             "notes": len(vault.notes),
             "links": len(all_links),
             "errors": len(unresolved) + len(cycles),
-            "has_critical": has_critical,
+            "has_critical": has_critical_json,
             "orphans": [str(note.relative_path) for note in orphan_notes],
             "unresolved": [
                 {
@@ -99,42 +130,18 @@ def audit_graph(
             ],
             "summary": proj_summary,
         }
+        if report_path is not None:
+            payload["report_path"] = str(report_path)
         emit_json(payload)
-        if has_critical:
+        if has_critical_json:
             raise typer.Exit(code=1)
         return
 
-    now = datetime.now(tz=timezone.utc)
-    timestamp = now.strftime("%Y-%m-%d %H:%M:%S UTC")
-    report = _build_markdown_report(
-        root=root,
-        project=project,
-        timestamp=timestamp,
-        vault=vault,
-        all_links=all_links,
-        unresolved=unresolved,
-        orphan_notes=orphan_notes,
-        cycles=cycles,
-        proj_summary=proj_summary,
-    )
-
-    # Determine output path
-    if output is not None:
-        report_path = output
-    else:
-        file_ts = now.strftime("%Y-%m-%d-%H%M%S")
-        if project:
-            audit_dir = storage.project_dir(root, project) / "audit-reports"
-        else:
-            audit_dir = storage.projects_dir(root) / "audit-reports"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        report_path = audit_dir / f"{file_ts}.md"
-
-    report_path.write_text(report, encoding="utf-8")
-    typer.echo(f"Audit report saved to: {report_path}")
+    if report_path is not None:
+        typer.echo(f"Audit report saved to: {report_path}")
     typer.echo(report)
 
-    if has_critical:
+    if has_critical_cli:
         raise typer.Exit(code=1)
 
 
@@ -154,6 +161,7 @@ def _build_markdown_report(
 
     scope = project if project else "all projects"
     lines.append(f"# Graph Audit Report")
+    lines.append(f"Vault Audit Report")
     lines.append(f"")
     lines.append(f"**Generated:** {timestamp}  ")
     lines.append(f"**Scope:** {scope}")
@@ -216,7 +224,7 @@ def _build_markdown_report(
     lines.append(f"")
 
     # Circular dependencies
-    lines.append("## Circular Dependencies")
+    lines.append("## Circular Dependencies (Link Cycles)")
     lines.append(f"")
     if cycles:
         lines.append("The following note cycles were detected:")

@@ -22,6 +22,7 @@ You are the delivery coordinator for this repository.
 - Do not directly own production code changes.
 - Use GitHub as the default execution source of truth.
 - Prefer single-agent execution unless independence is clear.
+- Use the cloud GitHub agent (`mcp_github_*` tools) only when explicitly requested; default to the local agent for all GitHub operations.
 
 ## Delegation Rules
 - Delegate to `Coder` for implementation.

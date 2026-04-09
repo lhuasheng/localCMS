@@ -398,6 +398,324 @@ class ObsidianCommandTests(unittest.TestCase):
             self.assertEqual(payload["unresolved_count"], 1)
             self.assertEqual(payload["unresolved"][0]["target"], "missing-note.md")
 
+    def test_audit_graph_detects_cycles_and_saves_report(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root, issue_counter=2)
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-001-alpha.md",
+                """
+                ---
+                id: ISSUE-001
+                title: Alpha
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                See [[ISSUE-002-beta]].
+                """,
+            )
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-002-beta.md",
+                """
+                ---
+                id: ISSUE-002
+                title: Beta
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                See [[ISSUE-001-alpha]].
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertEqual(len(payload["cycles"]), 1)
+            self.assertIn("report_path", payload)
+            report_path = Path(payload["report_path"])
+            self.assertTrue(report_path.exists())
+            report_text = report_path.read_text(encoding="utf-8")
+            self.assertIn("Vault Audit Report", report_text)
+            self.assertIn("Link Cycles", report_text)
+            self.assertIn("ISSUE-001-alpha", report_text)
+
+    def test_audit_graph_no_save_report_skips_file(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root)
+            _write_markdown(
+                root / "projects" / "demo" / "docs" / "guide.md",
+                """
+                ---
+                created_at: '2026-04-09'
+                project: demo
+                title: Guide
+                ---
+
+                # Guide
+
+                Plain text only.
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--no-save-report",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertNotIn("report_path", payload)
+            reports_dir = root / "projects" / "demo" / "audit-reports"
+            self.assertFalse(reports_dir.exists())
+
+    def test_audit_graph_no_cycles_clean_vault(self) -> None:
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_demo_project(root, issue_counter=1)
+            _write_markdown(
+                root / "projects" / "demo" / "issues" / "ISSUE-001-clean.md",
+                """
+                ---
+                id: ISSUE-001
+                title: Clean
+                status: todo
+                priority: medium
+                created_at: '2026-04-09'
+                tags: []
+                ---
+
+                ## Description
+                No links.
+                """,
+            )
+
+            result = runner.invoke(
+                app,
+                [
+                    "--root",
+                    str(root),
+                    "audit-graph",
+                    "--project",
+                    "demo",
+                    "--no-save-report",
+                    "--json",
+                ],
+            )
+
+            self.assertEqual(result.exit_code, 0, result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["cycles"], [])
+
+class FrontmatterValidationTests(unittest.TestCase):
+    """Tests for auto-validation of issue frontmatter against the default template."""
+
+    _STANDARD_TEMPLATE = textwrap.dedent(
+        """
+        ---
+        id: {{id}}
+        title: {{title}}
+        status: {{status}}
+        priority: {{priority}}
+        created_at: {{created_at}}
+        tags: {{tags_inline}}
+        ---
+        """
+    ).strip()
+
+    _EXTENDED_TEMPLATE = textwrap.dedent(
+        """
+        ---
+        id: {{id}}
+        title: {{title}}
+        status: {{status}}
+        priority: {{priority}}
+        created_at: {{created_at}}
+        tags: {{tags_inline}}
+        reviewer: {{reviewer}}
+        ---
+        """
+    ).strip()
+
+    def _setup_root(self, temp_dir: str, template_text: str | None = None) -> Path:
+        root = Path(temp_dir)
+        _write_demo_project(root)
+        if template_text is not None:
+            (root / ".obsidian" / "templates").mkdir(parents=True)
+            (root / ".obsidian" / "templates" / "issue-template.md").write_text(
+                template_text + "\n", encoding="utf-8"
+            )
+        return root
+
+    def _create_issue(self, runner: object, root: Path, extra_args: list[str] | None = None) -> object:
+        args = ["--root", str(root), "issue", "create", "Test task", "--project", "demo"]
+        if extra_args:
+            args.extend(extra_args)
+        return runner.invoke(app, args)
+
+    def _write_issue(self, root: Path, issue_id: str, extra_metadata: str = "") -> Path:
+        path = root / "projects" / "demo" / "issues" / f"{issue_id}-test-task.md"
+        path.write_text(
+            textwrap.dedent(
+                f"""
+                ---
+                id: {issue_id}
+                title: Test task
+                status: todo
+                priority: medium
+                created_at: '2026-01-01'
+                tags: []
+                {extra_metadata}
+                ---
+
+                ## Description
+                demo
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    # ------------------------------------------------------------------ create
+
+    def test_create_passes_when_no_template_exists(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, template_text=None)
+            result = self._create_issue(runner, root)
+            self.assertEqual(result.exit_code, 0, result.stdout)
+
+    def test_create_passes_with_standard_template(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._STANDARD_TEMPLATE)
+            result = self._create_issue(runner, root)
+            self.assertEqual(result.exit_code, 0, result.stdout)
+
+    def test_create_blocked_when_required_field_missing(self) -> None:
+        """Template requires 'reviewer'; create without it must fail with a clear message."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            result = self._create_issue(runner, root)
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("reviewer", result.output)
+            self.assertIn("Cannot create issue", result.output)
+
+    def test_create_skip_validation_bypasses_check(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            result = self._create_issue(runner, root, extra_args=["--skip-validation"])
+            self.assertEqual(result.exit_code, 0, result.stdout)
+
+    def test_create_blocked_does_not_consume_issue_id(self) -> None:
+        """A failed validation must not increment the issue counter."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            failed = self._create_issue(runner, root)
+            self.assertNotEqual(failed.exit_code, 0)
+            config = parser.read_yaml(root / "projects" / "demo" / "project.yaml")
+            self.assertEqual(config["issue_counter"], 0)
+
+    # ------------------------------------------------------------------ update
+
+    def test_update_passes_when_no_template_exists(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, template_text=None)
+            self._write_issue(root, "ISSUE-001")
+            result = runner.invoke(
+                app, ["--root", str(root), "issue", "update", "ISSUE-001", "--project", "demo", "--status", "done"]
+            )
+            self.assertEqual(result.exit_code, 0, result.stdout)
+
+    def test_update_passes_with_all_required_fields_present(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._STANDARD_TEMPLATE)
+            self._write_issue(root, "ISSUE-001")
+            result = runner.invoke(
+                app, ["--root", str(root), "issue", "update", "ISSUE-001", "--project", "demo", "--status", "done"]
+            )
+            self.assertEqual(result.exit_code, 0, result.stdout)
+
+    def test_update_blocked_when_required_field_missing(self) -> None:
+        """Template requires 'reviewer'; updating an issue that lacks it must fail."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            self._write_issue(root, "ISSUE-001")
+            result = runner.invoke(
+                app, ["--root", str(root), "issue", "update", "ISSUE-001", "--project", "demo", "--status", "done"]
+            )
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("reviewer", result.output)
+            self.assertIn("Cannot update issue", result.output)
+
+    def test_update_blocked_does_not_persist_changes(self) -> None:
+        """When validation blocks an update the file must not be modified."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            path = self._write_issue(root, "ISSUE-001")
+            original_text = path.read_text(encoding="utf-8")
+            runner.invoke(
+                app, ["--root", str(root), "issue", "update", "ISSUE-001", "--project", "demo", "--status", "done"]
+            )
+            self.assertEqual(path.read_text(encoding="utf-8"), original_text)
+
+    def test_update_skip_validation_bypasses_check(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._setup_root(temp_dir, self._EXTENDED_TEMPLATE)
+            self._write_issue(root, "ISSUE-001")
+            result = runner.invoke(
+                app,
+                [
+                    "--root", str(root),
+                    "issue", "update", "ISSUE-001",
+                    "--project", "demo",
+                    "--status", "done",
+                    "--skip-validation",
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.stdout)
 
 class AuditGraphCommandTests(unittest.TestCase):
     def _setup_clean_project(self, root: Path) -> None:
