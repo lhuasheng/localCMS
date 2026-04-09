@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from urllib.parse import unquote, urlparse
@@ -24,6 +24,7 @@ class VaultLink:
     resolved_path: Path | None
     is_resolved: bool
     reason: str | None = None
+    line_number: int | None = None
 
     @property
     def is_note_link(self) -> bool:
@@ -227,16 +228,55 @@ class ObsidianVault:
             )
         return summary
 
+    def circular_dependencies(self) -> list[list[Path]]:
+        """Return all simple cycles in the note-to-note link graph (each as an ordered list of Paths)."""
+        graph: dict[Path, list[Path]] = defaultdict(list)
+        for link in self.all_links():
+            if link.is_resolved and link.is_note_link and link.resolved_path is not None:
+                src = link.source_path.resolve()
+                dst = link.resolved_path.resolve()
+                if src != dst:
+                    graph[src].append(dst)
+
+        cycles: list[list[Path]] = []
+        visited: set[Path] = set()
+        rec_stack: list[Path] = []
+        in_stack: set[Path] = set()
+
+        def _dfs(node: Path) -> None:
+            visited.add(node)
+            rec_stack.append(node)
+            in_stack.add(node)
+            for neighbour in graph.get(node, []):
+                if neighbour not in visited:
+                    _dfs(neighbour)
+                elif neighbour in in_stack:
+                    cycle_start = rec_stack.index(neighbour)
+                    cycle = list(rec_stack[cycle_start:])
+                    normalized = _normalize_cycle(cycle)
+                    if normalized not in [_normalize_cycle(c) for c in cycles]:
+                        cycles.append(cycle)
+            rec_stack.pop()
+            in_stack.discard(node)
+
+        for note in self.notes:
+            node = note.path.resolve()
+            if node not in visited:
+                _dfs(node)
+
+        return cycles
+
     def links_for(self, note: VaultNote) -> list[VaultLink]:
         cached = self._links_cache.get(note.path.resolve())
         if cached is not None:
             return cached
-        sanitized_content = _strip_code_spans(note.content)
+        sanitized_content = _strip_code_spans_preserve_lines(note.content)
         links: list[VaultLink] = []
 
         for match in MARKDOWN_LINK_PATTERN.finditer(sanitized_content):
             raw_target = match.group(1).strip()
             resolved_path, reason = self._resolve_markdown_target(note.path, raw_target)
+            line_number = sanitized_content[: match.start()].count("\n") + 1
             links.append(
                 VaultLink(
                     source_path=note.path,
@@ -246,12 +286,14 @@ class ObsidianVault:
                     resolved_path=resolved_path,
                     is_resolved=resolved_path is not None,
                     reason=reason,
+                    line_number=line_number,
                 )
             )
 
         for match in WIKI_LINK_PATTERN.finditer(sanitized_content):
             raw_target = match.group(1).strip()
             resolved_path, reason = self._resolve_wiki_target(note.path, raw_target)
+            line_number = sanitized_content[: match.start()].count("\n") + 1
             links.append(
                 VaultLink(
                     source_path=note.path,
@@ -261,6 +303,7 @@ class ObsidianVault:
                     resolved_path=resolved_path,
                     is_resolved=resolved_path is not None,
                     reason=reason,
+                    line_number=line_number,
                 )
             )
 
@@ -340,8 +383,25 @@ class ObsidianVault:
         return relative_path.as_posix().removesuffix(".md")
 
 
+def _normalize_cycle(cycle: list[Path]) -> frozenset[tuple[Path, Path]]:
+    """Represent a cycle as a canonical frozenset of edges for deduplication."""
+    edges: list[tuple[Path, Path]] = []
+    for i in range(len(cycle)):
+        edges.append((cycle[i], cycle[(i + 1) % len(cycle)]))
+    return frozenset(edges)
+
+
 def _strip_code_spans(content: str) -> str:
     without_fences = FENCED_CODE_BLOCK_PATTERN.sub("", content)
+    without_indented_blocks = _strip_indented_code_blocks(without_fences)
+    return INLINE_CODE_PATTERN.sub("", without_indented_blocks)
+
+
+def _strip_code_spans_preserve_lines(content: str) -> str:
+    """Strip code blocks while preserving newline positions so line numbers remain accurate."""
+    without_fences = FENCED_CODE_BLOCK_PATTERN.sub(
+        lambda m: "\n" * m.group(0).count("\n"), content
+    )
     without_indented_blocks = _strip_indented_code_blocks(without_fences)
     return INLINE_CODE_PATTERN.sub("", without_indented_blocks)
 
