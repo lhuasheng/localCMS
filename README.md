@@ -61,6 +61,51 @@ cms audit-graph
 - `cms audit-graph` reports orphan notes, unresolved links, and per-project note counts.
 - Optional issue scaffolding templates can be used with `cms issue create ... --template issue-template`.
 
+## Pre-commit Hook
+
+A pre-commit hook runs `cms validate-backlinks` before every commit to catch broken links early.
+
+### Install (Unix / WSL / macOS)
+
+```bash
+bash scripts/install-hooks.sh
+```
+
+### Install (Windows — PowerShell)
+
+```powershell
+.\scripts\install-hooks.ps1
+```
+
+Both scripts copy the appropriate hook into `.git/hooks/pre-commit` and make it executable.
+
+### What the hook does
+
+Before each commit the hook runs:
+
+```bash
+cms validate-backlinks
+```
+
+If any unresolved links are found the commit is **blocked** and the broken links are printed.  Fix the reported issues and retry.
+
+### Bypass the hook
+
+To skip validation for a specific commit (not recommended for regular use):
+
+```bash
+git commit --no-verify
+```
+
+### Hook source files
+
+| File | Purpose |
+|------|---------|
+| `scripts/hooks/pre-commit` | Bash hook script (Unix/WSL/macOS) |
+| `scripts/hooks/pre-commit.ps1` | PowerShell hook script (Windows) |
+| `scripts/install-hooks.sh` | Installer for Unix/WSL/macOS |
+| `scripts/install-hooks.ps1` | Installer for Windows |
+
 ## Root Resolution
 
 Precedence for data root:
