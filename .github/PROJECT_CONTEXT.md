@@ -60,7 +60,6 @@
 |-------|----------------|----------------|
 | **Architect** | read, search, todo, agent, github/* | Technical design, decomposition, interface definition |
 | **Product Manager** | web, read, search, todo, agent, github/* | Product definition, prioritization, acceptance criteria |
-| **Scrum Master** | read, search, todo, agent, github/* | Sprint planning, sequencing, blocker tracking |
 | **Coder** | read, search, edit, execute, todo, agent, github/* | Feature implementation, bug fixes, refactoring |
 | **Reviewer** | read, search, todo, agent | Code review, QA, acceptance validation (strict: no execution) |
 | **Docs** | read, search, edit, todo, agent, github/* | Technical writing, README, architecture docs, runbooks |
@@ -82,6 +81,45 @@
 ### Anti-Pattern: Parallel Code Review + Implementation
 - Reviewer → Coder → Reviewer again always in sequence
 - Never run implementation and review in parallel for same change
+
+---
+
+## Acceptance Criteria Template
+
+Use this format when defining or reviewing scope:
+
+```markdown
+### MUST
+- [ ] Observable behavior that is required for completion.
+- [ ] Error handling and edge-case behavior for critical paths.
+
+### SHOULD
+- [ ] Non-critical improvements that add quality but are not blockers.
+
+### Validation Checklist
+- [ ] Commands/checks to run are listed.
+- [ ] Expected result for each check is listed.
+- [ ] Evidence source is defined (test output, logs, screenshots, etc.).
+```
+
+Good criteria examples:
+- MUST: "Creating a duplicate username returns HTTP 409 with stable error code `USER_EXISTS`."
+- MUST: "`npm test -- user-profile` passes with no skipped tests in modified suite."
+- SHOULD: "Error message text includes field name for failed validation."
+
+Bad criteria examples:
+- "Make it better."
+- "Should work for edge cases."
+- "Tests pass" (without naming which tests/checks and expected evidence).
+
+---
+
+## Quality KPIs
+
+- First-pass success rate: percent of changes passing required checks without rework.
+- Retry count: median number of fix/validate loops before acceptance.
+- Regression rate: percent of merged changes that require follow-up bug fixes.
+- Median changed files: median file count touched per delivered change.
 
 ---
 
